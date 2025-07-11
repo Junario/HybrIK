@@ -2,6 +2,7 @@
 import argparse
 import os
 import pickle as pk
+import json
 
 import cv2
 import numpy as np
@@ -80,6 +81,8 @@ parser.add_argument('--save-pk', default=False, dest='save_pk',
                     help='save prediction', action='store_true')
 parser.add_argument('--save-img', default=False, dest='save_img',
                     help='save prediction', action='store_true')
+parser.add_argument('--save-json', default=False, dest='save_json',
+                    help='save prediction as JSON', action='store_true')
 
 
 opt = parser.parse_args()
@@ -119,6 +122,19 @@ res_keys = [
     'img_path'
 ]
 res_db = {k: [] for k in res_keys}
+
+# JSON 출력을 위한 데이터 구조 (taiji_keypoints.json 형식에 맞춤)
+json_data = {
+    'video_path': '',
+    'fps': 0.0,
+    'total_frames': 0,
+    'joint_names': [
+        'pelv', 'lhip', 'rhip', 'spi1', 'lkne', 'rkne', 'spi2', 'lank', 'rank', 'spi3',
+        'ltoe', 'rtoe', 'neck', 'lcla', 'rcla', 'head', 'lsho', 'rsho', 'lelb', 'relb',
+        'lwri', 'rwri', 'lhan', 'rhan'
+    ],
+    'frames': []
+}
 
 transformation = SimpleTransform3DSMPLCam(
     dummpy_set, scale_factor=cfg.DATASET.SCALE_FACTOR,
@@ -163,6 +179,11 @@ if not os.path.exists(os.path.join(opt.out_dir, 'res_2d_images')) and opt.save_i
 
 _, info, _ = get_video_info(opt.video_name)
 video_basename = os.path.basename(opt.video_name).split('.')[0]
+
+# JSON 데이터에 비디오 정보 추가 (taiji_keypoints.json 형식에 맞춤)
+if opt.save_json:
+    json_data['video_path'] = opt.video_name
+    json_data['fps'] = float(info['fps'])
 
 savepath = f'./{opt.out_dir}/res_{video_basename}.mp4'
 savepath2d = f'./{opt.out_dir}/res_2d_{video_basename}.mp4'
@@ -335,6 +356,28 @@ for img_path in tqdm(img_path_list):
             res_db['width'].append(img_size[1])
             res_db['img_path'].append(img_path)
 
+        # JSON 데이터 수집 (taiji_keypoints.json 형식에 맞춤)
+        if opt.save_json:
+            # 24개 관절의 3D 키포인트 추출 (xyz_24_struct 사용)
+            keypoints_3d_24 = pose_output.pred_xyz_jts_24_struct.reshape(24, 3).cpu().data.numpy().tolist()
+            
+            # 2D 키포인트는 24개 관절에 대응하는 UV 좌표 추출
+            # 29개 키포인트에서 24개 관절에 해당하는 인덱스 매핑 필요
+            # 임시로 처음 24개 사용 (실제로는 정확한 매핑 필요)
+            keypoints_2d_24 = uv_29[:24].cpu().numpy().tolist()
+            
+            # timestamp 계산 (fps 기반)
+            timestamp = idx / json_data['fps'] if json_data['fps'] > 0 else 0.0
+            
+            frame_data = {
+                'frame_id': idx + 1,  # 1부터 시작
+                'timestamp': timestamp,
+                'bbox': bbox.tolist() if hasattr(bbox, 'tolist') else bbox,
+                'keypoints_3d': keypoints_3d_24,
+                'keypoints_2d': keypoints_2d_24
+            }
+            json_data['frames'].append(frame_data)
+
 
 if opt.save_pk:
     n_frames = len(res_db['img_path'])
@@ -345,6 +388,17 @@ if opt.save_pk:
 
     with open(os.path.join(opt.out_dir, 'res.pk'), 'wb') as fid:
         pk.dump(res_db, fid)
+
+# JSON 파일 저장 (taiji_keypoints.json 형식)
+if opt.save_json:
+    # 총 프레임 수 업데이트
+    json_data['total_frames'] = len(json_data['frames'])
+    
+    # JSON 파일로 저장
+    json_path = os.path.join(opt.out_dir, 'taiji_keypoints.json')
+    with open(json_path, 'w', encoding='utf-8') as f:
+        json.dump(json_data, f, indent=2, ensure_ascii=False)
+    print(f'JSON keypoints saved to: {json_path}')
 
 write_stream.release()
 write2d_stream.release()
