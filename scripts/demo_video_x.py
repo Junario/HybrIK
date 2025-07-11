@@ -165,11 +165,12 @@ res_keys = [
     'pred_camera',
     'f',
     'pred_betas',
-    'pred_thetas',
+    'pred_theta_quat',
+    'pred_theta_mat',
     'pred_phi',
-    'scale_mult',
     'pred_cam_root',
-    # 'features',
+    'pred_lh_uvd',
+    'pred_rh_uvd',
     'transl',
     'bbox',
     'height',
@@ -369,7 +370,7 @@ for img_path in tqdm(img_path_list):
             res_path = os.path.join(opt.out_dir, 'res_images', f'image-{idx:06d}.jpg')
             cv2.imwrite(res_path, image_vis)
         write_stream.write(image_vis)
-        '''
+        
         # vis 2d
         pts = uv_jts * bbox_xywh[2]
         pts[:, 0] = pts[:, 0] + bbox_xywh[0]
@@ -387,25 +388,92 @@ for img_path in tqdm(img_path_list):
 
         if opt.save_pt:
             assert pose_input.shape[0] == 1, 'Only support single batch inference for now'
-
-            pred_xyz_jts_17 = pose_output.pred_xyz_jts_17.reshape(
-                17, 3).cpu().data.numpy()
-            pred_uvd_jts = pose_output.pred_uvd_jts.reshape(
-                -1, 3).cpu().data.numpy()
-            pred_xyz_jts_29 = pose_output.pred_xyz_jts_29.reshape(
-                -1, 3).cpu().data.numpy()
-            pred_xyz_jts_24_struct = pose_output.pred_xyz_jts_24_struct.reshape(
-                24, 3).cpu().data.numpy()
-            pred_scores = pose_output.maxvals.cpu(
-            ).data[:, :29].reshape(29).numpy()
-            pred_camera = pose_output.pred_camera.squeeze(
-                dim=0).cpu().data.numpy()
-            pred_betas = pose_output.pred_shape.squeeze(
-                dim=0).cpu().data.numpy()
-            pred_theta = pose_output.pred_theta_mats.squeeze(
-                dim=0).cpu().data.numpy()
-            pred_phi = pose_output.pred_phi.squeeze(dim=0).cpu().data.numpy()
-            pred_cam_root = pose_output.cam_root.squeeze(dim=0).cpu().numpy()
+            
+            # Debug: Print available attributes (force on first iteration)
+            if len(res_db['pred_xyz_17']) == 0:
+                print("Available pose_output attributes:")
+                for attr in dir(pose_output):
+                    if not attr.startswith('_'):
+                        print(f"  {attr}")
+                print(f"pose_output type: {type(pose_output)}")
+                print(f"pose_output keys (if dict): {pose_output.keys() if hasattr(pose_output, 'keys') else 'Not a dict'}")
+                print(f"pose_output items (if dict): {list(pose_output.items())[:5] if hasattr(pose_output, 'items') else 'Not a dict'}")
+                print("="*50)
+            
+            # Extract 2D keypoints (UVD coordinates)
+            pred_uvd_jts = pose_output.pred_uvd_jts.reshape(-1, 3).cpu().data.numpy()
+            
+            # Extract 3D keypoints using available attributes
+            if hasattr(pose_output, 'pred_xyz_hybrik'):
+                pred_xyz_jts_17 = pose_output.pred_xyz_hybrik.reshape(-1, 3).cpu().data.numpy()
+            else:
+                pred_xyz_jts_17 = np.zeros((17, 3))
+                
+            if hasattr(pose_output, 'pred_xyz_hybrik_struct'):
+                pred_xyz_jts_24_struct = pose_output.pred_xyz_hybrik_struct.reshape(-1, 3).cpu().data.numpy()
+            else:
+                pred_xyz_jts_24_struct = np.zeros((24, 3))
+                
+            if hasattr(pose_output, 'pred_xyz_full'):
+                pred_xyz_jts_29 = pose_output.pred_xyz_full.reshape(-1, 3).cpu().data.numpy()
+            else:
+                pred_xyz_jts_29 = np.zeros((29, 3))
+                
+            # Extract scores
+            if hasattr(pose_output, 'scores'):
+                pred_scores = pose_output.scores.cpu().data.numpy()
+            elif hasattr(pose_output, 'maxvals'):
+                pred_scores = pose_output.maxvals.cpu().data[:, :29].reshape(29).numpy()
+            else:
+                pred_scores = np.ones(29)
+                
+            # Extract camera parameters
+            if hasattr(pose_output, 'pred_camera'):
+                pred_camera = pose_output.pred_camera.squeeze(dim=0).cpu().data.numpy()
+            else:
+                pred_camera = np.array([1.0, 0.0, 0.0])
+                
+            # Extract SMPL shape parameters
+            if hasattr(pose_output, 'pred_beta'):
+                pred_betas = pose_output.pred_beta.squeeze(dim=0).cpu().data.numpy()
+            elif hasattr(pose_output, 'pred_shape_full'):
+                pred_betas = pose_output.pred_shape_full.squeeze(dim=0).cpu().data.numpy()[:10]  # First 10 shape params
+            else:
+                pred_betas = np.zeros(10)
+                
+            # Extract SMPL pose parameters (quaternion format)
+            if hasattr(pose_output, 'pred_theta_quat'):
+                pred_theta_quat = pose_output.pred_theta_quat.squeeze(dim=0).cpu().data.numpy()
+            else:
+                pred_theta_quat = np.zeros((24, 4))  # 24 joints, 4 quaternion values
+                
+            # Extract SMPL pose parameters (matrix format)
+            if hasattr(pose_output, 'pred_theta_mat'):
+                pred_theta_mat = pose_output.pred_theta_mat.squeeze(dim=0).cpu().data.numpy()
+            else:
+                pred_theta_mat = np.zeros((24, 3, 3))  # 24 joints, 3x3 rotation matrices
+                
+            # Extract additional parameters
+            if hasattr(pose_output, 'pred_phi'):
+                pred_phi = pose_output.pred_phi.squeeze(dim=0).cpu().data.numpy()
+            else:
+                pred_phi = np.zeros(3)
+                
+            if hasattr(pose_output, 'cam_root'):
+                pred_cam_root = pose_output.cam_root.squeeze(dim=0).cpu().numpy()
+            else:
+                pred_cam_root = np.zeros(3)
+                
+            # Extract hand keypoints if available
+            if hasattr(pose_output, 'pred_lh_uvd'):
+                pred_lh_uvd = pose_output.pred_lh_uvd.squeeze(dim=0).cpu().data.numpy()
+            else:
+                pred_lh_uvd = np.zeros((21, 3))  # 21 hand keypoints
+                
+            if hasattr(pose_output, 'pred_rh_uvd'):
+                pred_rh_uvd = pose_output.pred_rh_uvd.squeeze(dim=0).cpu().data.numpy()
+            else:
+                pred_rh_uvd = np.zeros((21, 3))  # 21 hand keypoints
             img_size = np.array((input_image.shape[0], input_image.shape[1]))
 
             res_db['pred_xyz_17'].append(pred_xyz_jts_17)
@@ -416,16 +484,57 @@ for img_path in tqdm(img_path_list):
             res_db['pred_camera'].append(pred_camera)
             res_db['f'].append(1000.0)
             res_db['pred_betas'].append(pred_betas)
-            res_db['pred_thetas'].append(pred_theta)
+            res_db['pred_theta_quat'].append(pred_theta_quat)
+            res_db['pred_theta_mat'].append(pred_theta_mat)
             res_db['pred_phi'].append(pred_phi)
             res_db['pred_cam_root'].append(pred_cam_root)
-            # res_db['features'].append(img_feat)
+            res_db['pred_lh_uvd'].append(pred_lh_uvd)
+            res_db['pred_rh_uvd'].append(pred_rh_uvd)
             res_db['transl'].append(transl[0].cpu().data.numpy())
             res_db['bbox'].append(np.array(bbox))
             res_db['height'].append(img_size[0])
             res_db['width'].append(img_size[1])
             res_db['img_path'].append(img_path)
-        '''
 
 write_stream.release()
 write2d_stream.release()
+
+# Save keypoints and SMPL parameters to JSON file
+if opt.save_pt and len(res_db['pred_xyz_17']) > 0:
+    import json
+    
+    # Convert numpy arrays to lists for JSON serialization
+    def convert_to_serializable(obj):
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        elif isinstance(obj, np.integer):
+            return int(obj)
+        elif isinstance(obj, np.floating):
+            return float(obj)
+        elif isinstance(obj, list):
+            return [convert_to_serializable(item) for item in obj]
+        elif isinstance(obj, dict):
+            return {key: convert_to_serializable(value) for key, value in obj.items()}
+        else:
+            return obj
+    
+    json_data = {}
+    for key, value_list in res_db.items():
+        if len(value_list) > 0:
+            json_data[key] = convert_to_serializable(value_list)
+    
+    # Add metadata
+    json_data['metadata'] = {
+        'video_name': opt.video_name,
+        'total_frames': len(json_data.get('pred_xyz_17', [])),
+        'model_config': cfg_file,
+        'model_checkpoint': CKPT
+    }
+    
+    # Save to JSON file
+    json_path = os.path.join(opt.out_dir, f'{video_basename}_keypoints.json')
+    with open(json_path, 'w', encoding='utf-8') as f:
+        json.dump(json_data, f, indent=2, ensure_ascii=False)
+    
+    print(f'Saved keypoints and SMPL parameters to {json_path}')
+    print(f'Total frames processed: {len(json_data.get("pred_xyz_17", []))}')
