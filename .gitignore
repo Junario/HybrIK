@@ -108,3 +108,7 @@ data
 data/
 exp
 model_files
+
+# Pretrained models (large files)
+pretrained_models/
+*.pth
