@@ -112,3 +112,16 @@ model_files
 # Pretrained models (large files)
 pretrained_models/
 *.pth
+
+# Results and output files
+results/
+res_*/
+*.mp4
+*.avi
+*.mov
+*.png
+*.jpg
+*.jpeg
+raw_images/
+res_images/
+res_*_images/
