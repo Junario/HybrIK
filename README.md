@@ -47,6 +47,9 @@ python setup.py develop
 ```bash
 # 비디오 데모 실행
 python scripts/demo_video.py --video-name examples/taiji.mp4 --out-dir results --save-img
+
+# 2D,3D 키포인트 & SMPL 파라미터 추출
+python scripts/demo_video_x.py --video-name examples/taiji.mp4 --out-dir result --save-img --save-pt
 ```
 ---
 ## 📝 사용법
