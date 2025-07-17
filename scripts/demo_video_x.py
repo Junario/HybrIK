@@ -133,6 +133,8 @@ parser.add_argument('--save-pt', default=False, dest='save_pt',
                     help='save prediction', action='store_true')
 parser.add_argument('--save-img', default=False, dest='save_img',
                     help='save prediction', action='store_true')
+parser.add_argument('--save-npz', default=False, dest='save_npz',
+                    help='save prediction in NPZ format for SmoothNet', action='store_true')
 
 
 opt = parser.parse_args()
@@ -388,7 +390,7 @@ for img_path in tqdm(img_path_list):
 
         if opt.save_pt:
             assert pose_input.shape[0] == 1, 'Only support single batch inference for now'
-            
+
             # Debug: Print available attributes (force on first iteration)
             if len(res_db['pred_xyz_17']) == 0:
                 print("Available pose_output attributes:")
@@ -499,9 +501,10 @@ for img_path in tqdm(img_path_list):
 write_stream.release()
 write2d_stream.release()
 
-# Save keypoints and SMPL parameters to JSON file
+# Save keypoints and SMPL parameters to JSON and pickle files
 if opt.save_pt and len(res_db['pred_xyz_17']) > 0:
     import json
+    import pickle
     
     # Convert numpy arrays to lists for JSON serialization
     def convert_to_serializable(obj):
@@ -518,23 +521,132 @@ if opt.save_pt and len(res_db['pred_xyz_17']) > 0:
         else:
             return obj
     
+    # Prepare data for JSON
     json_data = {}
     for key, value_list in res_db.items():
         if len(value_list) > 0:
             json_data[key] = convert_to_serializable(value_list)
     
     # Add metadata
-    json_data['metadata'] = {
+    metadata = {
         'video_name': opt.video_name,
         'total_frames': len(json_data.get('pred_xyz_17', [])),
         'model_config': cfg_file,
         'model_checkpoint': CKPT
     }
+    json_data['metadata'] = metadata
     
     # Save to JSON file
     json_path = os.path.join(opt.out_dir, f'{video_basename}_keypoints.json')
     with open(json_path, 'w', encoding='utf-8') as f:
         json.dump(json_data, f, indent=2, ensure_ascii=False)
     
-    print(f'Saved keypoints and SMPL parameters to {json_path}')
+    # Save to pickle file (preserves numpy arrays and original data types)
+    pickle_data = res_db.copy()
+    pickle_data['metadata'] = metadata
+    
+    pickle_path = os.path.join(opt.out_dir, f'{video_basename}_keypoints.pkl')
+    with open(pickle_path, 'wb') as f:
+        pickle.dump(pickle_data, f, protocol=pickle.HIGHEST_PROTOCOL)
+    
+    print(f'Saved keypoints and SMPL parameters to:')
+    print(f'  JSON: {json_path}')
+    print(f'  Pickle: {pickle_path}')
     print(f'Total frames processed: {len(json_data.get("pred_xyz_17", []))}')
+    
+    # Print file sizes for comparison
+    json_size = os.path.getsize(json_path) / (1024 * 1024)  # MB
+    pickle_size = os.path.getsize(pickle_path) / (1024 * 1024)  # MB
+    print(f'File sizes: JSON={json_size:.1f}MB, Pickle={pickle_size:.1f}MB')
+
+# Save keypoints in NPZ format for SmoothNet (dance_hybrik_3D_test.npz와 동일한 구조)
+if opt.save_npz and len(res_db['pred_xyz_17']) > 0:
+    print(f'\nSaving NPZ files for SmoothNet...')
+    
+    # Get video name for imgname (dance_hybrik_3D_test.npz와 동일한 형식)
+    video_name = opt.video_name  # 전체 경로 사용 (예: examples/ohyeah.mp4)
+    total_frames = len(res_db['pred_xyz_17'])
+    
+    # Create imgname array for SmoothNet format (dance_hybrik_3D_test.npz와 동일)
+    imgname = [f"{video_name}/frame_{i:06d}" for i in range(total_frames)]
+    
+    # Convert keypoints to numpy arrays
+    keypoints_3d_17 = np.array(res_db['pred_xyz_17'])  # (frames, 17, 3)
+    keypoints_3d_24 = np.array(res_db['pred_xyz_24_struct'])  # (frames, 24, 3)
+    keypoints_3d_29 = np.array(res_db['pred_xyz_29'])  # (frames, 29, 3)
+    
+    # Extract SMPL parameters
+    pose_params = np.array(res_db['pred_theta_quat'])  # (frames, 24, 4)
+    shape_params = np.array(res_db['pred_betas'])  # (frames, 10)
+    
+    # Convert pose from quaternion to rotation matrix format (simplified)
+    # For SmoothNet, we need (frames, 72) pose parameters
+    if len(pose_params.shape) == 3:  # (frames, 24, 4) quaternion format
+        pose_flat = pose_params[:, :, :3].reshape(total_frames, -1)  # Take first 3 values from quaternion
+    elif len(pose_params.shape) == 2:  # (frames, 96) already flattened
+        pose_flat = pose_params[:, :72]  # Take first 72 values
+    else:
+        pose_flat = np.zeros((total_frames, 72))
+    
+    # Save 17 keypoints NPZ file
+    if keypoints_3d_17.shape[1] == 17:
+        keypoints_17_flat = keypoints_3d_17.reshape(total_frames, -1)  # (frames, 51)
+        npz_data_17 = {
+            'imgname': np.array(imgname),
+            'keypoints_3d': keypoints_17_flat
+        }
+        npz_path_17 = os.path.join(opt.out_dir, f'{video_basename}_17_3D_test.npz')
+        np.savez(npz_path_17, **npz_data_17)
+        print(f'  17 keypoints NPZ: {npz_path_17} (shape: {keypoints_17_flat.shape})')
+    
+    # Save 24 keypoints NPZ file
+    if keypoints_3d_24.shape[1] == 24:
+        keypoints_24_flat = keypoints_3d_24.reshape(total_frames, -1)  # (frames, 72)
+        npz_data_24 = {
+            'imgname': np.array(imgname),
+            'keypoints_3d': keypoints_24_flat
+        }
+        npz_path_24 = os.path.join(opt.out_dir, f'{video_basename}_24_3D_test.npz')
+        np.savez(npz_path_24, **npz_data_24)
+        print(f'  24 keypoints NPZ: {npz_path_24} (shape: {keypoints_24_flat.shape})')
+    
+    # Save 29 keypoints NPZ file
+    if keypoints_3d_29.shape[1] == 29:
+        keypoints_29_flat = keypoints_3d_29.reshape(total_frames, -1)  # (frames, 87)
+        npz_data_29 = {
+            'imgname': np.array(imgname),
+            'keypoints_3d': keypoints_29_flat
+        }
+        npz_path_29 = os.path.join(opt.out_dir, f'{video_basename}_29_3D_test.npz')
+        np.savez(npz_path_29, **npz_data_29)
+        print(f'  29 keypoints NPZ: {npz_path_29} (shape: {keypoints_29_flat.shape})')
+    
+    # Save SMPL parameters NPZ file
+    if pose_flat.shape[1] == 72 and shape_params.shape[1] == 10:
+        npz_data_smpl = {
+            'imgname': np.array(imgname),
+            'pose': pose_flat,
+            'shape': shape_params
+        }
+        npz_path_smpl = os.path.join(opt.out_dir, f'{video_basename}_smpl_test.npz')
+        np.savez(npz_path_smpl, **npz_data_smpl)
+        print(f'  SMPL parameters NPZ: {npz_path_smpl} (pose: {pose_flat.shape}, shape: {shape_params.shape})')
+    
+    # Save 71 keypoints NPZ file (dance_hybrik_3D_test.npz와 동일한 구조)
+    # pred_xyz_24_struct가 이미 71개 키포인트를 가지고 있음
+    if keypoints_3d_24.shape[1] == 71:
+        # 71개 키포인트를 그대로 사용
+        keypoints_71_flat = keypoints_3d_24.reshape(total_frames, -1)  # (frames, 213)
+        npz_data_71 = {
+            'imgname': np.array(imgname),
+            'keypoints_3d': keypoints_71_flat
+        }
+        npz_path_71 = os.path.join(opt.out_dir, f'{video_basename}_hybrik_3D_test.npz')
+        np.savez(npz_path_71, **npz_data_71)
+        print(f'  71 keypoints NPZ (dance_hybrik_3D_test.npz 형식): {npz_path_71} (shape: {keypoints_71_flat.shape})')
+    else:
+        print(f'  Warning: Expected 71 keypoints, but got {keypoints_3d_24.shape[1]} keypoints')
+    
+    print(f'NPZ files saved successfully!')
+    print(f'Total frames: {total_frames}')
+    print(f'Video name: {video_name}')
